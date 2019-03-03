@@ -37,11 +37,14 @@ type alias Model =
 type Scene
   = Title
   | Flight
-    { player : Player }
+    { player : Player
+    , bullets : List Bullet
+    }
 
 type alias Player =
   { x : Int
   , y : Int
+  , r : Int
   }
 
 init : () -> (Model, Cmd Msg)
@@ -52,6 +55,12 @@ init _ =
     }
   , Cmd.none
   )
+
+type Bullet
+  = CvlmMiddle Position Velocity
+
+type alias Position = (Float, Float)
+type alias Velocity = (Float, Float)
 
 
 
@@ -74,17 +83,20 @@ update msg model =
     KeyEvent key False ->
       ( { model | keys = model.keys |> Key.remove key }, Cmd.none )
     TakeOff ->
-      ( { model | scene = Flight { player = { x = 200, y = 450} } }, Cmd.none )
+      ( { model | scene = Flight { player = { x = 200, y = 450, r = 0}, bullets = [CvlmMiddle (200.0, 0.0) (0.0, 1.0)] } }, Cmd.none )
     TouchDown ->
       ( { model | scene = Title }, Cmd.none )
     Tick ->
       case model.scene of
         Title ->
           ( model , Cmd.none )
-        Flight {player} ->
+        Flight {player, bullets} ->
           (
             { model | scene =
-              Flight { player = nextTick player model.keys }
+              Flight
+              { player = nextTick player model.keys
+              , bullets = bulletsUpdate bullets
+              }
             }
           , Cmd.none
           )
@@ -119,6 +131,12 @@ nextTick player keyset =
           _ -> y
         )
         player.y
+
+    nr = if Key.member Key.Left keyset then player.r + 1
+      else if Key.member Key.Right keyset then player.r - 1
+      else if player.r > 0 then player.r - 1
+      else if player.r < 0 then player.r + 1
+      else player.r
   in
   { player
     | x = nx
@@ -127,7 +145,30 @@ nextTick player keyset =
     , y = ny
       |> max movableArea.yMin
       |> min movableArea.yMax
+    , r = nr
+      |> max -6
+      |> min  6
   }
+
+bulletsUpdate: List Bullet -> List Bullet
+bulletsUpdate bullets =
+  bullets
+    |> List.map bulletMove
+    |> List.filter bulletRemained
+
+bulletMove: Bullet -> Bullet
+bulletMove bullet =
+  case bullet of
+    CvlmMiddle (x, y) (vx, vy) ->
+      CvlmMiddle (x+vx, y+vy) (vx, vy)
+
+cvlmMargin = 10
+bulletRemained: Bullet -> Bool
+bulletRemained bullet =
+  case bullet of
+    CvlmMiddle (x, y) _ ->
+     (-cvlmMargin < x) && (x < viewBoxWidth + cvlmMargin) &&
+     (-cvlmMargin < y) && (y < viewBoxHeight + cvlmMargin)
 
 
 
@@ -156,19 +197,27 @@ view model =
           ]
         ]
 
-    Flight {player}->
+    Flight {player, bullets} ->
       Html.div []
         [ Svg.svg
-          [ Attr.width "400"
-          , Attr.height "500"
-          , Attr.viewBox "0 0 400 500"
+          [ Attr.width (String.fromInt viewBoxWidth)
+          , Attr.height (String.fromInt viewBoxHeight)
+          , Attr.viewBox ("0 0 "++(String.fromInt viewBoxWidth)++" "++(String.fromInt viewBoxHeight))
           , Attr.style "background: #333"
           ]
-          [ Chip.player
-              |> Chip.translate player.x player.y
-          ]
+          ((playerView player) :: (bullets |> List.map bulletView))
         , Html.text (toString model.keys)
         ]
+
+playerView: Player -> Svg msg
+playerView player =
+  Chip.player player.x player.y player.r
+
+bulletView: Bullet -> Svg msg
+bulletView bullet =
+  case bullet of
+    CvlmMiddle (x, y) _ ->
+      Chip.bulletMiddle (round x) (round y)
 
 
 

@@ -1,26 +1,33 @@
 module Chip exposing
   ( player
-  , translate
+  , bulletMiddle
   )
 
 import Svg exposing (..)
 import Svg.Attributes exposing (..)
 
-player: List (Svg msg)
-player =
+player: Int -> Int -> Int -> Svg msg
+player x y roll =
   [ Circle  0  0  9 darkRed red
   , Circle -3 -3  5 none lightRed
-  , Polygon [(0, -21), (0, 4), ( 19, 14)] gray none
-  , Polygon [(0, -21), (0, 4), (-19, 14)] lightGray none
+  , Polygon [(0, -21), (0-roll*2//3, 4), ( 19-roll, 14-roll//2)] gray none
+  , Polygon [(0, -21), (0-roll*2//3, 4), (-19-roll, 14+roll//2)] lightGray none
   ]
     |> List.map toSvg
+    |> translate x y
 
+
+bulletMiddle: Int -> Int -> Svg msg
+bulletMiddle x y =
+  Circle x y 7 darkMagenta magenta
+    |> toSvg
 
 
 type Figure
   = Polygon (List (Int, Int)) Color Color
   | Polyline (List (Int, Int)) Color
   | Circle Int Int Int Color Color
+  | Rotate Int (List Figure)
 
 toSvg: Figure -> Svg msg
 toSvg obj =
@@ -33,6 +40,7 @@ toSvg obj =
             |> List.intersperse " "
             |> String.concat)
         , stroke s_
+        , strokeWidth "2"
         , fill f_
         ][]
 
@@ -56,6 +64,12 @@ toSvg obj =
         , fill f_
         ][]
 
+    Rotate deg figures ->
+      g
+        [ transform <| "rotate(" ++ String.fromInt deg ++ ")"]
+        (figures |> List.map toSvg)
+
+
 translate: Int -> Int -> List (Svg msg) -> Svg msg
 translate x y contents =
   Svg.g
@@ -78,6 +92,7 @@ blue = "#0000FF"
 lightBlue = "#8888FF"
 darkBlue = "#000088"
 magenta = "#FF00FF"
+darkMagenta = "#880088"
 
 white = "#FFFFFF"
 lightGray = "#AAAAAA"
