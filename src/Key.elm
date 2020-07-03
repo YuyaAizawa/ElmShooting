@@ -1,6 +1,8 @@
 module Key exposing
-  ( KeySet
-  , Key(..)
+  ( Key(..)
+  , decoder
+  --
+  , KeySet
   , empty
   , member
   , insert
@@ -11,18 +13,53 @@ module Key exposing
   , fromList
   )
 
+import Browser.Events exposing (onKeyUp, onKeyDown)
+import Json.Decode as Json
 import Set exposing (Set)
-
-type KeySet
-  = KeySet (Set Int)
 
 type Key
   = Up
   | Down
   | Left
   | Right
+  | Space
   | Shift
 
+decoder : (KeySet -> msg) -> KeySet -> Sub msg
+decoder msgMapper previous =
+  Sub.batch
+  [ onKeyDown <| keyUpdater insert previous <| msgMapper
+  , onKeyUp   <| keyUpdater remove previous <| msgMapper
+  ]
+
+keyUpdater: (Key -> KeySet -> KeySet) -> KeySet -> (KeySet -> msg) -> Json.Decoder msg
+keyUpdater op previous msgMapper =
+  Json.field "key" Json.string
+    |> Json.map
+      (fromName
+        >> Maybe.map (\key -> op key previous)
+        >> Maybe.withDefault previous
+        >> msgMapper
+      )
+
+fromName : String -> Maybe Key
+fromName key =
+  case key of
+    "ArrowUp"    -> Just Up
+    "ArrowDown"  -> Just Down
+    "ArrowLeft"  -> Just Left
+    "ArrowRight" -> Just Right
+    " "          -> Just Space
+    "Shift"      -> Just Shift
+    _            -> Nothing
+
+
+
+-- KEY SET
+
+
+type KeySet
+  = KeySet (Set Int)
 
 empty : KeySet
 empty =
@@ -71,7 +108,6 @@ fromList : List Key -> KeySet
 fromList =
   List.foldl insert empty
 
-
 toInt : Key -> Int
 toInt key =
   case key of
@@ -79,7 +115,8 @@ toInt key =
     Down -> 2
     Left -> 3
     Right -> 4
-    Shift -> 5
+    Space -> 5
+    Shift -> 6
 
 fromInt : Int -> Key
 fromInt int =
@@ -88,4 +125,5 @@ fromInt int =
     2 -> Down
     3 -> Left
     4 -> Right
+    5 -> Space
     _ -> Shift

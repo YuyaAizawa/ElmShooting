@@ -1,13 +1,12 @@
 module Main exposing (main)
 
 import Browser
-import Browser.Events exposing (onKeyDown, onKeyUp)
 import Html exposing (Html)
 import Svg exposing (Svg)
 import Svg.Attributes as Attr
 import Svg.Events
 import Time
-import Json.Decode as Json
+
 
 import Debug exposing (toString)
 
@@ -71,17 +70,15 @@ type Msg
   | TakeOff
   | TouchDown
   | Tick
-  | KeyEvent Key Bool
+  | KeyUpdate KeySet
 
 update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
   case msg of
     Nop ->
       ( model, Cmd.none )
-    KeyEvent key True ->
-      ( { model | keys = model.keys |> Key.insert key }, Cmd.none )
-    KeyEvent key False ->
-      ( { model | keys = model.keys |> Key.remove key }, Cmd.none )
+    KeyUpdate keys ->
+      ( { model | keys = keys }, Cmd.none )
     TakeOff ->
       ( { model | scene = Flight { player = { x = 200, y = 450, r = 0}, bullets = [CvlmMiddle (200.0, 0.0) (0.0, 1.0)] } }, Cmd.none )
     TouchDown ->
@@ -228,21 +225,6 @@ subscriptions model =
   case model.scene of
     _ ->
       Sub.batch
-        [ onKeyDown (keyDecoder True)
-        , onKeyUp (keyDecoder False)
+        [ Key.decoder KeyUpdate model.keys
         , Time.every 30 (\_ -> Tick)
         ]
-
-keyDecoder : Bool -> Json.Decoder Msg
-keyDecoder pressed =
-  let
-    stringToMsg string =
-      case string of
-        "ArrowUp" -> KeyEvent Key.Up pressed
-        "ArrowDown" -> KeyEvent Key.Down pressed
-        "ArrowRight" -> KeyEvent Key.Right pressed
-        "ArrowLeft" -> KeyEvent Key.Left pressed
-        "Shift" -> KeyEvent Key.Shift pressed
-        _ -> Nop
-  in
-    Json.map stringToMsg (Json.field "key" Json.string)
