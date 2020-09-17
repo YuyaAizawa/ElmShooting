@@ -1,17 +1,19 @@
 module Main exposing (main)
 
 import Browser
-import Html exposing (Html)
+import Browser.Events exposing (onAnimationFrame)
+import Html exposing (Html, br)
+import Html.Attributes as HAttr
+import Html.Events
+import Json.Decode as Json
 import Svg exposing (Svg)
-import Svg.Attributes as Attr
+import Svg.Attributes as SAttr
 import Svg.Events
-import Time
-
 
 import Debug exposing (toString)
 
 import Key exposing (KeySet, Key(..))
-import Chip
+import Renderer3D exposing (..)
 
 main =
   Browser.element
@@ -35,15 +37,17 @@ type alias Model =
 
 type Scene
   = Title
-  | Flight
-    { player : Player
-    , bullets : List Bullet
-    }
+  | Flight FlightModel
+
+type alias FlightModel =
+  { player : Player
+  , bullets : List Bullet
+  }
 
 type alias Player =
-  { x : Int
-  , y : Int
-  , r : Int
+  { x : Float
+  , y : Float
+  , r : Float
   }
 
 init : () -> (Model, Cmd Msg)
@@ -58,8 +62,8 @@ init _ =
 type Bullet
   = CvlmMiddle Position Velocity
 
-type alias Position = (Float, Float)
-type alias Velocity = (Float, Float)
+type alias Position = ( Float, Float )
+type alias Velocity = ( Float, Float )
 
 
 
@@ -71,6 +75,8 @@ type Msg
   | TouchDown
   | Tick
   | KeyUpdate KeySet
+  -- Flight
+  | FlightUpdate FlightModel
 
 update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
@@ -80,14 +86,14 @@ update msg model =
     KeyUpdate keys ->
       ( { model | keys = keys }, Cmd.none )
     TakeOff ->
-      ( { model | scene = Flight { player = { x = 200, y = 450, r = 0}, bullets = [CvlmMiddle (200.0, 0.0) (0.0, 1.0)] } }, Cmd.none )
+      ( { model | scene = Flight { player = { x = 0.0, y = 10.0, r = 0.0 }, bullets = [ CvlmMiddle ( 0.0, 200.0 ) ( 0.1, -1.0 ) ] } }, Cmd.none )
     TouchDown ->
       ( { model | scene = Title }, Cmd.none )
     Tick ->
       case model.scene of
         Title ->
           ( model , Cmd.none )
-        Flight {player, bullets} ->
+        Flight { player, bullets } ->
           (
             { model | scene =
               Flight
@@ -98,41 +104,58 @@ update msg model =
           , Cmd.none
           )
 
-movableMergin = 10
+    FlightUpdate flight ->
+      ( { model | scene = Flight flight }, Cmd.none )
+
+
+movableMergin = 5
 movableArea =
-  { xMin = movableMergin
-  , xMax = viewBoxWidth - movableMergin
-  , yMin = movableMergin
-  , yMax = viewBoxHeight - movableMergin
+  { xMin = -100 + movableMergin
+  , xMax =  100 - movableMergin
+  , yMin =    0 + movableMergin
+  , yMax =  300 - movableMergin
   }
 
 nextTick : Player -> KeySet -> Player
 nextTick player keyset =
   let
-    d = if keyset |> Key.member Key.Shift then 5 else 12
+    d = if keyset |> Key.member Key.Shift then 1.5 else 3.5
 
-    nx = keyset
-      |> Key.foldl
-        (\k x -> case k of
-          Left -> x-d
-          Right -> x+d
-          _ -> x
-        )
-        player.x
+    nx =
+      keyset
+        |> Key.foldl
+          (\k x -> case k of
+            Left -> x-d
+            Right -> x+d
+            _ -> x
+          )
+          player.x
 
-    ny = keyset
-      |> Key.foldl
-        (\k y -> case k of
-          Up -> y-d
-          Down -> y+d
-          _ -> y
-        )
-        player.y
+    ny =
+      keyset
+        |> Key.foldl
+          (\k y -> case k of
+            Up -> y+d
+            Down -> y-d
+            _ -> y
+          )
+          player.y
 
-    nr = if Key.member Key.Left keyset then player.r + 1
-      else if Key.member Key.Right keyset then player.r - 1
-      else if player.r > 0 then player.r - 1
-      else if player.r < 0 then player.r + 1
+    nr =
+      if Key.member Key.Left keyset
+      then player.r - 0.1
+      else if Key.member Key.Right keyset
+      then player.r + 0.1
+      else if player.r > 0
+      then
+        if player.r > 0.1
+        then player.r - 0.1
+        else 0.0
+      else if player.r < 0
+      then
+        if player.r < -0.1
+        then player.r + 0.1
+        else 0.0
       else player.r
   in
   { player
@@ -143,8 +166,8 @@ nextTick player keyset =
       |> max movableArea.yMin
       |> min movableArea.yMax
     , r = nr
-      |> max -6
-      |> min  6
+      |> max -0.6
+      |> min  0.6
   }
 
 bulletsUpdate: List Bullet -> List Bullet
@@ -177,45 +200,99 @@ view model =
     Title ->
       Html.div []
         [ Svg.svg
-          [ Attr.width (String.fromInt viewBoxWidth)
-          , Attr.height (String.fromInt viewBoxHeight)
-          , Attr.viewBox ("0 0 "++(String.fromInt viewBoxWidth)++" "++(String.fromInt viewBoxHeight))
-          , Attr.style "background: #eee"
+          [ SAttr.width (String.fromInt viewBoxWidth)
+          , SAttr.height (String.fromInt viewBoxHeight)
+          , SAttr.viewBox ("0 0 "++(String.fromInt viewBoxWidth)++" "++(String.fromInt viewBoxHeight))
+          , SAttr.style "background: #eee"
           ]
           [ Svg.text_
-            [ Attr.x "200"
-            , Attr.y "300"
-            , Attr.fontSize "24"
-            , Attr.textAnchor "middle"
-            , Attr.class "fade-in-1s"
+            [ SAttr.x "200"
+            , SAttr.y "300"
+            , SAttr.fontSize "24"
+            , SAttr.textAnchor "middle"
+            , SAttr.class "fade-in-1s"
             , Svg.Events.onClick TakeOff
             ]
             [ Svg.text "Title" ]
           ]
         ]
 
-    Flight {player, bullets} ->
-      Html.div []
-        [ Svg.svg
-          [ Attr.width (String.fromInt viewBoxWidth)
-          , Attr.height (String.fromInt viewBoxHeight)
-          , Attr.viewBox ("0 0 "++(String.fromInt viewBoxWidth)++" "++(String.fromInt viewBoxHeight))
-          , Attr.style "background: #333"
+    Flight flightModel ->
+      let
+        player = flightModel.player
+        bullets = flightModel.bullets
+        c = camera ( player.x / 2.0 , -200.0, 180) -1.57 -2.6 350 ( -200.0, -300.0, 0 )
+      in
+        Html.div []
+          [ Svg.svg
+            [ SAttr.width (String.fromInt viewBoxWidth)
+            , SAttr.height (String.fromInt viewBoxHeight)
+            , SAttr.viewBox ("0 0 "++(String.fromInt viewBoxWidth)++" "++(String.fromInt viewBoxHeight))
+            , SAttr.style "background: #333"
+            ]
+            ([ renderStage c
+            , renderPlayer c player
+            ] ++ List.map (renderBullet c) bullets)
           ]
-          ((playerView player) :: (bullets |> List.map bulletView))
-        , Html.text (toString model.keys)
-        ]
 
-playerView: Player -> Svg msg
-playerView player =
-  Chip.player player.x player.y player.r
+renderStage : Camera -> Svg msg
+renderStage c =
+  Svg.g []
+  [ renderPolyline c "#666"
+    [ (  -33.0, 0.0,   0.0 )
+    , (  -33.0, 0.0, 300.0 )
+    , (   33.0, 0.0, 300.0 )
+    , (   33.0, 0.0,   0.0 )
+    ]
+  , renderPolyline c "#666"
+    [ (  -100.0, 0.0, 100.0 )
+    , (  -100.0, 0.0, 200.0 )
+    , (   100.0, 0.0, 200.0 )
+    , (   100.0, 0.0, 100.0 )
+    , (  -100.0, 0.0, 100.0 )
+    ]
+  , renderPolyline c "#EEE"
+    [ ( -100.0, 0.0,   0.0 )
+    , ( -100.0, 0.0, 300.0 )
+    , (  100.0, 0.0, 300.0 )
+    , (  100.0, 0.0,   0.0 )
+    ]
+  ]
 
-bulletView: Bullet -> Svg msg
-bulletView bullet =
-  case bullet of
-    CvlmMiddle (x, y) _ ->
-      Chip.bulletMiddle (round x) (round y)
+renderPlayer : Camera -> Player -> Svg msg
+renderPlayer c { x, y, r } =
+  Svg.g []
+  [ renderBall c "#800" "#F00" ( x, 0.0, y ) 4.0
+  , [ (   0.0,  5.0,  0.0 )
+    , (   0.0,  0.0, 10.0 )
+    , ( -10.0, -1.0, -4.0 )
+    , (   0.0,  5.0,  0.0 )
+    ] |> List.map (roll r)
+      |> List.map (translate ( x, 0.0, y ))
+      |> renderPolyline c "#AAA"
 
+  , [ (   0.0,  5.0,  0.0 )
+    , (   0.0,  0.0, 10.0 )
+    , (  10.0, -1.0, -4.0 )
+    , (   0.0,  5.0,  0.0 )
+    ] |> List.map (roll r)
+      |> List.map (translate ( x, 0.0, y ))
+      |> renderPolyline c "#888"
+  ]
+
+renderBullet : Camera -> Bullet -> Svg msg
+renderBullet c b =
+  case b of
+    CvlmMiddle ( x, y ) _ ->
+      renderBall c "#808" "#F0F" ( x, 0.0, y ) 3.0
+
+roll : Float -> Point3D -> Point3D
+roll a ( x, y, z ) =
+  ( x*cos a + y*sin a, -x*sin a + y*cos a, z )
+
+translate : Point3D -> Point3D -> Point3D
+translate ( dx, dy, dz ) ( x, y, z ) =
+  ( x + dx, y + dy, z + dz )
 
 
 -- SUBSCRIPTION --
@@ -226,5 +303,5 @@ subscriptions model =
     _ ->
       Sub.batch
         [ Key.decoder KeyUpdate model.keys
-        , Time.every 30 (\_ -> Tick)
+        , onAnimationFrame (\_ -> Tick)
         ]
