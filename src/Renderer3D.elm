@@ -1,5 +1,9 @@
 module Renderer3D exposing
   ( Point3D
+  , translate
+  , yaw
+  , pitch
+  , roll
   , Camera
   , camera
   , renderPolyline
@@ -10,6 +14,22 @@ import Svg exposing (Svg)
 import Svg.Attributes as Attr
 
 type alias Point3D = ( Float, Float, Float )
+
+translate : Point3D -> Point3D -> Point3D
+translate ( dx, dy, dz ) ( x, y, z ) =
+  ( x + dx, y + dy, z + dz )
+
+yaw : Float -> Point3D -> Point3D
+yaw a ( x, y, z ) =
+  ( x*cos a - z*sin a, y, x*sin a + z*cos a )
+
+pitch : Float -> Point3D -> Point3D
+pitch a ( x, y, z ) =
+  ( x, y*cos a + z*sin a, -y*sin a + z*cos a )
+
+roll : Float -> Point3D -> Point3D
+roll a ( x, y, z ) =
+  ( x*cos a + y*sin a, -x*sin a + y*cos a, z )
 
 type Camera = Camera Matrix4D
 

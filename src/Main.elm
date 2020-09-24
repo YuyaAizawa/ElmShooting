@@ -41,6 +41,7 @@ type Scene
 
 type alias FlightModel =
   { player : Player
+  , enemies : List Butterfly
   , bullets : List Bullet
   }
 
@@ -59,6 +60,12 @@ init _ =
   , Cmd.none
   )
 
+type alias Butterfly =
+  { x : Float
+  , y : Float
+  , t : Int
+  }
+
 type Bullet
   = CvlmMiddle Position Velocity
 
@@ -75,8 +82,6 @@ type Msg
   | TouchDown
   | Tick
   | KeyUpdate KeySet
-  -- Flight
-  | FlightUpdate FlightModel
 
 update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
@@ -86,26 +91,32 @@ update msg model =
     KeyUpdate keys ->
       ( { model | keys = keys }, Cmd.none )
     TakeOff ->
-      ( { model | scene = Flight { player = { x = 0.0, y = 10.0, r = 0.0 }, bullets = [ CvlmMiddle ( 0.0, 200.0 ) ( 0.1, -1.0 ) ] } }, Cmd.none )
+      ( { model
+        | scene = Flight
+          { player = { x = 0.0, y = 10.0, r = 0.0 }
+          , enemies = [ { x = 0.0, y = 150.0, t = 0} ]
+          , bullets = [ CvlmMiddle ( 0.0, 200.0 ) ( 0.1, -1.0 ) ]
+          }
+        }
+      , Cmd.none
+      )
     TouchDown ->
       ( { model | scene = Title }, Cmd.none )
     Tick ->
       case model.scene of
         Title ->
           ( model , Cmd.none )
-        Flight { player, bullets } ->
+        Flight { player, enemies, bullets } ->
           (
             { model | scene =
               Flight
               { player = nextTick player model.keys
+              , enemies = enemiesUpdate enemies
               , bullets = bulletsUpdate bullets
               }
             }
           , Cmd.none
           )
-
-    FlightUpdate flight ->
-      ( { model | scene = Flight flight }, Cmd.none )
 
 
 movableMergin = 5
@@ -169,6 +180,10 @@ nextTick player keyset =
       |> max -0.6
       |> min  0.6
   }
+enemiesUpdate: List Butterfly -> List Butterfly
+enemiesUpdate enemies =
+  enemies
+    |> List.map (\e -> { e | t = e.t + 1 })
 
 bulletsUpdate: List Bullet -> List Bullet
 bulletsUpdate bullets =
@@ -220,6 +235,7 @@ view model =
     Flight flightModel ->
       let
         player = flightModel.player
+        enemies = flightModel.enemies
         bullets = flightModel.bullets
         c = camera ( player.x / 2.0 , -200.0, 180) -1.57 -2.6 350 ( -200.0, -300.0, 0 )
       in
@@ -230,9 +246,12 @@ view model =
             , SAttr.viewBox ("0 0 "++(String.fromInt viewBoxWidth)++" "++(String.fromInt viewBoxHeight))
             , SAttr.style "background: #333"
             ]
-            ([ renderStage c
-            , renderPlayer c player
-            ] ++ List.map (renderBullet c) bullets)
+            ( [ renderStage c
+              , renderPlayer c player
+              ]
+              ++ List.map (renderButterfly c) enemies
+              ++ List.map (renderBullet c) bullets
+            )
           ]
 
 renderStage : Camera -> Svg msg
@@ -280,19 +299,46 @@ renderPlayer c { x, y, r } =
       |> renderPolyline c "#888"
   ]
 
+renderButterfly : Camera -> Butterfly -> Svg msg
+renderButterfly c { x, y, t } =
+  let
+    w0 = sin (toFloat t * 0.07) * 0.8
+    w1 = sin (toFloat t * 0.07 + 0.4) * 0.8
+  in
+    Svg.g []
+    ( [ [ (  0.0,  0.0,  0.0 )
+        , ( 10.0, 10.0,  0.0 )
+        , (  7.0,  0.0,  0.0 )
+        , (  0.0,  0.0,  0.0 )
+        ] |> List.map (yaw w1)
+      , [ (  0.0,  0.0,  0.0 )
+        , (  7.0, -3.0,  0.0 )
+        , (  3.0,-10.0,  0.0 )
+        , (  0.0,  0.0,  0.0 )
+        ] |> List.map (yaw w0)
+      , [ (  0.0,  0.0,  0.0 )
+        , (-10.0, 10.0,  0.0 )
+        , ( -7.0,  0.0,  0.0 )
+        , (  0.0,  0.0,  0.0 )
+        ] |> List.map (yaw -w1)
+      , [ (  0.0,  0.0,  0.0 )
+        , ( -7.0, -3.0,  0.0 )
+        , ( -3.0,-10.0,  0.0 )
+        , (  0.0,  0.0,  0.0 )
+        ] |> List.map (yaw -w0)
+      ] |> List.map
+        ( List.map
+            ( pitch 0.2 >> translate ( x, 0.0, y ))
+            >> renderPolyline c "#F30"
+        )
+    )
+
 renderBullet : Camera -> Bullet -> Svg msg
 renderBullet c b =
   case b of
     CvlmMiddle ( x, y ) _ ->
       renderBall c "#808" "#F0F" ( x, 0.0, y ) 3.0
 
-roll : Float -> Point3D -> Point3D
-roll a ( x, y, z ) =
-  ( x*cos a + y*sin a, -x*sin a + y*cos a, z )
-
-translate : Point3D -> Point3D -> Point3D
-translate ( dx, dy, dz ) ( x, y, z ) =
-  ( x + dx, y + dy, z + dz )
 
 
 -- SUBSCRIPTION --
