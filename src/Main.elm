@@ -41,7 +41,7 @@ type Scene
 
 type alias FlightModel =
   { player : Player
-  , enemies : List Butterfly
+  , enemies : List Enemy
   , bullets : List Bullet
   }
 
@@ -60,17 +60,43 @@ init _ =
   , Cmd.none
   )
 
-type alias Butterfly =
-  { x : Float
-  , y : Float
-  , t : Int
+type alias Enemy =
+  { tick : Int
+  , move : Int -> EnemyProperty
+  , shot : Player -> Int -> List Bullet
+  , remained : Int -> Bool
   }
 
-type Bullet
-  = CvlmMiddle Position Velocity
+type alias EnemyProperty =
+  { x : Float
+  , y : Float
+  , characteristics : Characteristics
+  }
 
-type alias Position = ( Float, Float )
-type alias Velocity = ( Float, Float )
+type Characteristics
+  = ButterflyCharacteristics
+      { a : Float
+      , w : Float
+      }
+
+type alias Bullet =
+  { shape : BulletShape
+  , tick : Int
+  , move : Int -> Position
+  , remained : Int -> Bool
+  }
+
+type BulletShape
+  = Middle
+
+type alias Position =
+  { x : Float
+  , y : Float
+  }
+type alias Velocity =
+  { x : Float
+  , y : Float
+  }
 
 
 
@@ -88,49 +114,70 @@ update msg model =
   case msg of
     Nop ->
       ( model, Cmd.none )
+
     KeyUpdate keys ->
       ( { model | keys = keys }, Cmd.none )
+
     TakeOff ->
+      let bcs = butterflyCurbedStrategy 0.003 in
       ( { model
         | scene = Flight
           { player = { x = 0.0, y = 10.0, r = 0.0 }
-          , enemies = [ { x = 0.0, y = 150.0, t = 0} ]
-          , bullets = [ CvlmMiddle ( 0.0, 200.0 ) ( 0.1, -1.0 ) ]
+          , enemies =
+            [
+              { tick = 0
+              , move = bcs
+              , shot = shotAimPlayer bcs 2.0 200
+              , remained = isOnStage << bcs
+              }
+            ]
+          , bullets = []
           }
         }
       , Cmd.none
       )
+
     TouchDown ->
       ( { model | scene = Title }, Cmd.none )
+
     Tick ->
       case model.scene of
         Title ->
           ( model , Cmd.none )
+
         Flight { player, enemies, bullets } ->
-          (
-            { model | scene =
+          ( { model | scene =
               Flight
-              { player = nextTick player model.keys
-              , enemies = enemiesUpdate enemies
-              , bullets = bulletsUpdate bullets
+              { player = player |> playerMove model.keys
+              , enemies = objectsUpdate enemies
+              , bullets = enemiesShoot player enemies ++ objectsUpdate bullets
               }
             }
           , Cmd.none
           )
 
-
-movableMergin = 5
-movableArea =
-  { xMin = -100 + movableMergin
-  , xMax =  100 - movableMergin
-  , yMin =    0 + movableMergin
-  , yMax =  300 - movableMergin
+stage =
+  { minX = -100.0
+  , maxX =  100.0
+  , minY =    0.0
+  , maxY =  300.0
   }
 
-nextTick : Player -> KeySet -> Player
-nextTick player keyset =
+movableMergin = 5.0
+movableArea =
+  { minX = stage.minX + movableMergin
+  , maxX = stage.maxX - movableMergin
+  , minY = stage.minY + movableMergin
+  , maxY = stage.maxY - movableMergin
+  }
+
+playerMove : KeySet -> Player -> Player
+playerMove keyset player =
   let
-    d = if keyset |> Key.member Key.Shift then 1.5 else 3.5
+    d =
+      if keyset |> Key.member Key.Shift
+      then 1.5
+      else 3.5
 
     nx =
       keyset
@@ -153,57 +200,47 @@ nextTick player keyset =
           player.y
 
     nr =
-      if Key.member Key.Left keyset
-      then player.r - 0.1
-      else if Key.member Key.Right keyset
-      then player.r + 0.1
-      else if player.r > 0
-      then
-        if player.r > 0.1
-        then player.r - 0.1
-        else 0.0
-      else if player.r < 0
-      then
-        if player.r < -0.1
-        then player.r + 0.1
-        else 0.0
-      else player.r
+      keyset
+        |> Key.foldl
+          (\k r -> case k of
+            Left -> r - 0.1
+            Right -> r + 0.1
+            _ -> r
+          )
+          player.r
+        |> (\r ->
+          let
+            absr = abs player.r
+          in
+            if absr < 0.1
+            then 0.0
+            else player.r + player.r / absr * -0.1)
   in
   { player
     | x = nx
-      |> max movableArea.xMin
-      |> min movableArea.xMax
+      |> max movableArea.minX
+      |> min movableArea.maxX
     , y = ny
-      |> max movableArea.yMin
-      |> min movableArea.yMax
+      |> max movableArea.minY
+      |> min movableArea.maxY
     , r = nr
       |> max -0.6
       |> min  0.6
   }
-enemiesUpdate: List Butterfly -> List Butterfly
-enemiesUpdate enemies =
+
+type alias Object obj =
+  { obj | tick : Int, remained : Int -> Bool }
+
+objectsUpdate : List (Object obj) -> List (Object obj)
+objectsUpdate objects =
+  objects
+    |> List.map (\obj -> { obj | tick = obj.tick + 1 })
+    |> List.filter (\obj -> obj.remained obj.tick)
+
+enemiesShoot : Player -> List Enemy -> List Bullet
+enemiesShoot player enemies =
   enemies
-    |> List.map (\e -> { e | t = e.t + 1 })
-
-bulletsUpdate: List Bullet -> List Bullet
-bulletsUpdate bullets =
-  bullets
-    |> List.map bulletMove
-    |> List.filter bulletRemained
-
-bulletMove: Bullet -> Bullet
-bulletMove bullet =
-  case bullet of
-    CvlmMiddle (x, y) (vx, vy) ->
-      CvlmMiddle (x+vx, y+vy) (vx, vy)
-
-cvlmMargin = 10
-bulletRemained: Bullet -> Bool
-bulletRemained bullet =
-  case bullet of
-    CvlmMiddle (x, y) _ ->
-     (-cvlmMargin < x) && (x < viewBoxWidth + cvlmMargin) &&
-     (-cvlmMargin < y) && (y < viewBoxHeight + cvlmMargin)
+    |> List.concatMap (\e -> e.shot player e.tick)
 
 
 
@@ -249,7 +286,7 @@ view model =
             ( [ renderStage c
               , renderPlayer c player
               ]
-              ++ List.map (renderButterfly c) enemies
+              ++ List.map (renderEnemy c) enemies
               ++ List.map (renderBullet c) bullets
             )
           ]
@@ -299,14 +336,22 @@ renderPlayer c { x, y, r } =
       |> renderPolyline c "#888"
   ]
 
-renderButterfly : Camera -> Butterfly -> Svg msg
-renderButterfly c { x, y, t } =
+renderEnemy : Camera -> Enemy -> Svg msg
+renderEnemy camera enemy =
   let
-    w0 = sin (toFloat t * 0.07) * 0.8
-    w1 = sin (toFloat t * 0.07 + 0.4) * 0.8
+    property = enemy.move enemy.tick
   in
-    Svg.g []
-    ( [ [ (  0.0,  0.0,  0.0 )
+    case property.characteristics of
+      ButterflyCharacteristics { a, w } ->
+        renderButterfly camera property.x property.y a w
+
+renderButterfly : Camera -> Float -> Float -> Float -> Float -> Svg msg
+renderButterfly c x y a w =
+  let
+    w0 = sin w * 0.8
+    w1 = sin (w + 0.4) * 0.8
+    svgList =
+      [ [ (  0.0,  0.0,  0.0 )
         , ( 10.0, 10.0,  0.0 )
         , (  7.0,  0.0,  0.0 )
         , (  0.0,  0.0,  0.0 )
@@ -328,16 +373,20 @@ renderButterfly c { x, y, t } =
         ] |> List.map (yaw -w0)
       ] |> List.map
         ( List.map
-            ( pitch 0.2 >> translate ( x, 0.0, y ))
+            ( pitch 0.2 >> yaw a >> translate ( x, 0.0, y ))
             >> renderPolyline c "#F30"
         )
-    )
+  in
+    Svg.g [] svgList
 
 renderBullet : Camera -> Bullet -> Svg msg
-renderBullet c b =
-  case b of
-    CvlmMiddle ( x, y ) _ ->
-      renderBall c "#808" "#F0F" ( x, 0.0, y ) 3.0
+renderBullet camera bullet =
+  let
+    p = bullet.move bullet.tick
+  in
+    case bullet.shape of
+      Middle ->
+        renderBall camera "#808" "#F0F" ( p.x, 0.0, p.y ) 3.0
 
 
 
@@ -351,3 +400,70 @@ subscriptions model =
         [ Key.decoder KeyUpdate model.keys
         , onAnimationFrame (\_ -> Tick)
         ]
+
+
+
+-- ENEMY --
+
+butterflyCurbedStrategy : Float -> Int -> EnemyProperty
+butterflyCurbedStrategy omega =
+  \tick ->
+    let
+      theta = omega * toFloat tick
+    in
+      { x = 150.0 - 200.0 * cos theta
+      , y = 300.0 - 200.0 * sin theta
+      , characteristics =
+        ButterflyCharacteristics
+        { a = theta
+        , w = toFloat tick * 0.07
+        }
+      }
+
+shotAimPlayer : (Int -> EnemyProperty) -> Float -> Int -> Player -> Int -> List Bullet
+shotAimPlayer pp speed interval =
+  \player tick ->
+    case modBy interval tick of
+      0 ->
+        let
+          p = pp tick
+          dx = player.x - p.x
+          dy = player.y - p.y
+          dd = sqrt (dx*dx + dy*dy)
+        in
+          [ cvlmMiddle { x = p.x, y = p.y } { x = dx / dd * speed, y = dy / dd * speed } ]
+
+      _ ->
+        []
+
+
+
+-- BULLET --
+
+cvlmMiddle : Position -> Velocity -> Bullet
+cvlmMiddle pos vel =
+  let
+    predictor = cvlm pos vel
+  in
+    { shape = Middle
+    , tick = 0
+    , move = predictor
+    , remained = isOnStage << predictor
+    }
+
+cvlm : Position -> Velocity -> Int -> Position
+cvlm p0 v =
+  \tick ->
+    { x = p0.x + v.x * toFloat tick
+    , y = p0.y + v.y * toFloat tick
+    }
+
+
+
+-- UTILITY --
+
+margin = 10.0
+isOnStage : { obj | x : Float, y : Float } -> Bool
+isOnStage { x, y } =
+  stage.minX < x + margin && x - margin < stage.maxX &&
+  stage.minY < y + margin && y - margin < stage.maxY
