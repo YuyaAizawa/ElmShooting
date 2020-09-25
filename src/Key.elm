@@ -7,15 +7,18 @@ module Key exposing
   , member
   , insert
   , remove
-  , foldl
-  , foldr
+  , fold
   , toList
   , fromList
   )
 
 import Browser.Events exposing (onKeyUp, onKeyDown)
 import Json.Decode as Json
-import Set exposing (Set)
+import Bitwise exposing (..)
+
+
+
+-- KEY
 
 type Key
   = Up
@@ -24,6 +27,25 @@ type Key
   | Right
   | Space
   | Shift
+
+all =
+  [ Up
+  , Down
+  , Left
+  , Right
+  , Space
+  , Shift
+  ]
+
+mask : Key -> Int
+mask key =
+  case key of
+    Up    ->  1
+    Down  ->  2
+    Left  ->  4
+    Right ->  8
+    Space -> 16
+    Shift -> 32
 
 decoder : (KeySet -> msg) -> KeySet -> Sub msg
 decoder msgMapper previous =
@@ -57,73 +79,46 @@ fromName key =
 
 -- KEY SET
 
-
 type KeySet
-  = KeySet (Set Int)
+  = KeySet Int
 
 empty : KeySet
 empty =
-  KeySet (Set.empty)
+  KeySet 0
 
 member : Key -> KeySet -> Bool
-member key keyset =
-  case keyset of
-    KeySet contents ->
-      contents
-        |> Set.member (key |> toInt)
+member key (KeySet n) =
+  mask key
+    |> and n
+    |> (/=) 0
 
 insert : Key -> KeySet -> KeySet
-insert key keyset =
-  case keyset of
-    KeySet contents ->
-      contents
-        |> Set.insert (key |> toInt)
-        |> KeySet
+insert key (KeySet n) =
+  mask key
+    |> or n
+    |> KeySet
 
 remove : Key -> KeySet -> KeySet
-remove key keyset =
-  case keyset of
-    KeySet contents ->
-      contents
-        |> Set.remove (key |> toInt)
-        |> KeySet
+remove key (KeySet n) =
+  mask key
+    |> complement
+    |> and n
+    |> KeySet
 
-foldl : (Key -> a -> a) -> a -> KeySet -> a
-foldl acc init keyset =
-  case keyset of
-    KeySet contents ->
-      contents |> Set.foldl (acc << fromInt) init
-
-foldr : (Key -> a -> a) -> a -> KeySet -> a
-foldr acc init keyset =
-  case keyset of
-    KeySet contents ->
-      contents |> Set.foldr (acc << fromInt) init
+fold : (Key -> a -> a) -> a -> KeySet -> a
+fold acc init keyset =
+  let
+    acc_ = \k a ->
+      if member k keyset
+      then acc k a
+      else a
+  in
+    List.foldl acc_ init all
 
 toList : KeySet -> List Key
 toList =
-  foldl (::) []
+  fold (::) []
 
 fromList : List Key -> KeySet
 fromList =
   List.foldl insert empty
-
-toInt : Key -> Int
-toInt key =
-  case key of
-    Up -> 1
-    Down -> 2
-    Left -> 3
-    Right -> 4
-    Space -> 5
-    Shift -> 6
-
-fromInt : Int -> Key
-fromInt int =
-  case int of
-    1 -> Up
-    2 -> Down
-    3 -> Left
-    4 -> Right
-    5 -> Space
-    _ -> Shift

@@ -181,7 +181,7 @@ playerMove keyset player =
 
     nx =
       keyset
-        |> Key.foldl
+        |> Key.fold
           (\k x -> case k of
             Left -> x-d
             Right -> x+d
@@ -191,7 +191,7 @@ playerMove keyset player =
 
     ny =
       keyset
-        |> Key.foldl
+        |> Key.fold
           (\k y -> case k of
             Up -> y+d
             Down -> y-d
@@ -201,7 +201,7 @@ playerMove keyset player =
 
     nr =
       keyset
-        |> Key.foldl
+        |> Key.fold
           (\k r -> case k of
             Left -> r - 0.1
             Right -> r + 0.1
