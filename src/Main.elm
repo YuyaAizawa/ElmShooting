@@ -45,12 +45,6 @@ type alias FlightModel =
   , bullets : List Bullet
   }
 
-type alias Player =
-  { x : Float
-  , y : Float
-  , r : Float
-  }
-
 init : () -> (Model, Cmd Msg)
 init _ =
   (
@@ -60,40 +54,72 @@ init _ =
   , Cmd.none
   )
 
-type alias Enemy =
-  { tick : Int
-  , move : Int -> EnemyProperty
-  , shot : Player -> Int -> List Bullet
-  , remained : Int -> Bool
-  }
-
 type alias EnemyProperty =
-  { x : Float
-  , y : Float
-  , characteristics : Characteristics
+  { shape : Shape
+  , move : MoveStrategy
+  , survive : SurviveStrategy
+  , shot : ShotStrategy
   }
 
-type Characteristics
-  = ButterflyCharacteristics
-      { a : Float
-      , w : Float
-      }
+type alias ButtetProperty =
+  { shape : Shape
+  , move : MoveStrategy
+  , survive : SurviveStrategy
+  }
+
+type Shape
+  = Butterfly
+  | BulletMiddle
+
+type alias MoveStrategy =
+  Strategy Vec2 -- player
+  Vec2
+
+type alias SurviveStrategy =
+  Strategy Vec2 -- object
+  Bool
+
+type alias ShotStrategy =
+  Strategy ( Vec2, Vec2 ) -- ( player, enemy )
+  (List Bullet)
+
+type Strategy a b =
+  Strategy (a -> ( b, Strategy a b ))
+
+type alias Player =
+  Position
+  { r : Float
+  }
+
+type alias Enemy =
+  Object
+  { shot : ShotStrategy
+  , bullets : List Bullet
+  }
 
 type alias Bullet =
-  { shape : BulletShape
-  , tick : Int
-  , move : Int -> Position
-  , remained : Int -> Bool
+  Object
+  {
   }
 
-type BulletShape
-  = Middle
+type alias Object misc =
+  Position
+  { misc
+  | d : Float
+  , tick : Int
+  , shape : Shape
+  , move : MoveStrategy
+  , survive : SurviveStrategy
+  , isSurvive : Bool
+  }
 
-type alias Position =
-  { x : Float
+type alias Position misc =
+  { misc
+  | x : Float
   , y : Float
   }
-type alias Velocity =
+
+type alias Vec2 =
   { x : Float
   , y : Float
   }
@@ -119,18 +145,10 @@ update msg model =
       ( { model | keys = keys }, Cmd.none )
 
     TakeOff ->
-      let bcs = butterflyCurbedStrategy 0.003 in
       ( { model
         | scene = Flight
           { player = { x = 0.0, y = 10.0, r = 0.0 }
-          , enemies =
-            [
-              { tick = 0
-              , move = bcs
-              , shot = shotAimPlayer bcs 2.0 200
-              , remained = isOnStage << bcs
-              }
-            ]
+          , enemies = [ sampleEnemy ]
           , bullets = []
           }
         }
@@ -145,16 +163,37 @@ update msg model =
         Title ->
           ( model , Cmd.none )
 
-        Flight { player, enemies, bullets } ->
-          ( { model | scene =
+        Flight { player, enemies, bullets } as flight ->
+          let
+            player_ =
+              player
+                |> playerMove model.keys
+
+            enemies_ =
+              enemies
+                |> List.map (updateEnemy player)
+                |> List.filter .isSurvive
+
+            newBullets =
+              enemies_
+                |> List.concatMap .bullets
+
+            existingBullets =
+              bullets
+                |> List.map (updateBullet player)
+                |> List.filter .isSurvive
+
+            bullets_ =
+              newBullets ++ existingBullets
+
+            scene =
               Flight
-              { player = player |> playerMove model.keys
-              , enemies = objectsUpdate enemies
-              , bullets = enemiesShoot player enemies ++ objectsUpdate bullets
+              { player = player_
+              , enemies = enemies_
+              , bullets = bullets_
               }
-            }
-          , Cmd.none
-          )
+          in
+            ( { model | scene = scene }, Cmd.none )
 
 stage =
   { minX = -100.0
@@ -228,19 +267,66 @@ playerMove keyset player =
       |> min  0.6
   }
 
-type alias Object obj =
-  { obj | tick : Int, remained : Int -> Bool }
+updateEnemy : Player -> Enemy -> Enemy
+updateEnemy player this =
+  this
+    |> updatePosition player
+    |> updateSurvive
+    |> updateShot player
+    |> updateTick
 
-objectsUpdate : List (Object obj) -> List (Object obj)
-objectsUpdate objects =
-  objects
-    |> List.map (\obj -> { obj | tick = obj.tick + 1 })
-    |> List.filter (\obj -> obj.remained obj.tick)
+updateBullet : Player -> Bullet -> Bullet
+updateBullet player this =
+  this
+    |> updatePosition player
+    |> updateSurvive
+    |> updateTick
 
-enemiesShoot : Player -> List Enemy -> List Bullet
-enemiesShoot player enemies =
-  enemies
-    |> List.concatMap (\e -> e.shot player e.tick)
+updatePosition : Player -> Object a -> Object a
+updatePosition player this =
+  let
+    ( { x, y }, next ) =
+      case this.move of
+        Strategy s -> s (player |> getPosition)
+
+    d =
+      atan2 (this.y - y) (this.x - x)
+  in
+    { this
+    | x = x
+    , y = y
+    , d = d
+    , move = next
+    }
+
+updateSurvive : Object a -> Object a
+updateSurvive this =
+  let
+    ( isSurvive, next ) =
+      case this.survive of
+        Strategy s -> s (this |> getPosition)
+  in
+    { this
+    | survive = next
+    , isSurvive = isSurvive
+    }
+
+updateShot : Player -> Enemy -> Enemy
+updateShot player this =
+  let
+    ( bullets, next ) =
+      case this.shot of
+        Strategy s -> s ( player |> getPosition, this |> getPosition )
+  in
+    { this
+    | shot = next
+    , bullets = bullets
+    }
+
+updateTick : Object a -> Object a
+updateTick this =
+  { this | tick = this.tick + 1 }
+
 
 
 
@@ -286,8 +372,8 @@ view model =
             ( [ renderStage c
               , renderPlayer c player
               ]
-              ++ List.map (renderEnemy c) enemies
-              ++ List.map (renderBullet c) bullets
+              ++ List.map (renderObject c) enemies
+              ++ List.map (renderObject c) bullets
             )
           ]
 
@@ -336,14 +422,15 @@ renderPlayer c { x, y, r } =
       |> renderPolyline c "#888"
   ]
 
-renderEnemy : Camera -> Enemy -> Svg msg
-renderEnemy camera enemy =
-  let
-    property = enemy.move enemy.tick
-  in
-    case property.characteristics of
-      ButterflyCharacteristics { a, w } ->
-        renderButterfly camera property.x property.y a w
+renderObject : Camera -> Object a -> Svg msg
+renderObject camera this =
+  case this.shape of
+    Butterfly ->
+      renderButterfly camera this.x this.y this.d (toFloat this.tick * 0.07)
+
+    BulletMiddle ->
+      renderBall camera "#808" "#F0F" ( this.x, 0.0, this.y ) 3.0
+
 
 renderButterfly : Camera -> Float -> Float -> Float -> Float -> Svg msg
 renderButterfly c x y a w =
@@ -373,20 +460,11 @@ renderButterfly c x y a w =
         ] |> List.map (yaw -w0)
       ] |> List.map
         ( List.map
-            ( pitch 0.2 >> yaw a >> translate ( x, 0.0, y ))
+            ( pitch 0.2 >> yaw (a - (3.14/2) ) >> translate ( x, 0.0, y ))
             >> renderPolyline c "#F30"
         )
   in
     Svg.g [] svgList
-
-renderBullet : Camera -> Bullet -> Svg msg
-renderBullet camera bullet =
-  let
-    p = bullet.move bullet.tick
-  in
-    case bullet.shape of
-      Middle ->
-        renderBall camera "#808" "#F0F" ( p.x, 0.0, p.y ) 3.0
 
 
 
@@ -405,65 +483,172 @@ subscriptions model =
 
 -- ENEMY --
 
-butterflyCurbedStrategy : Float -> Int -> EnemyProperty
-butterflyCurbedStrategy omega =
-  \tick ->
-    let
-      theta = omega * toFloat tick
-    in
-      { x = 150.0 - 200.0 * cos theta
-      , y = 300.0 - 200.0 * sin theta
-      , characteristics =
-        ButterflyCharacteristics
-        { a = theta
-        , w = toFloat tick * 0.07
-        }
-      }
+sampleEnemy : Enemy
+sampleEnemy =
+  enemy
+  { shape = Butterfly
+  , move = circularMove { x = 150, y = 300 } 200.0 3.14 0.01
+  , survive = surviveOnStage
+  , shot = sampleShotStrategy
+  }
 
-shotAimPlayer : (Int -> EnemyProperty) -> Float -> Int -> Player -> Int -> List Bullet
-shotAimPlayer pp speed interval =
-  \player tick ->
-    case modBy interval tick of
-      0 ->
-        let
-          p = pp tick
-          dx = player.x - p.x
-          dy = player.y - p.y
-          dd = sqrt (dx*dx + dy*dy)
-        in
-          [ cvlmMiddle { x = p.x, y = p.y } { x = dx / dd * speed, y = dy / dd * speed } ]
-
-      _ ->
-        []
+enemy : EnemyProperty -> Enemy
+enemy { shape, move, survive, shot } =
+  { x = 0/0
+  , y = 0/0
+  , d = 0/0
+  , shape = shape
+  , move = move
+  , survive = survive
+  , shot = shot
+  , tick = 0
+  , isSurvive = True
+  , bullets = []
+  }
 
 
 
 -- BULLET --
 
-cvlmMiddle : Position -> Velocity -> Bullet
-cvlmMiddle pos vel =
-  let
-    predictor = cvlm pos vel
-  in
-    { shape = Middle
-    , tick = 0
-    , move = predictor
-    , remained = isOnStage << predictor
-    }
-
-cvlm : Position -> Velocity -> Int -> Position
-cvlm p0 v =
-  \tick ->
-    { x = p0.x + v.x * toFloat tick
-    , y = p0.y + v.y * toFloat tick
-    }
+bullet : ButtetProperty -> Bullet
+bullet { shape, move, survive } =
+  { x = 0/0
+  , y = 0/0
+  , d = 0/0
+  , shape = shape
+  , move = move
+  , survive = survive
+  , tick = 0
+  , isSurvive = True
+  }
 
 
 
--- UTILITY --
+-- MOVE --
 
-margin = 10.0
-isOnStage : { obj | x : Float, y : Float } -> Bool
-isOnStage { x, y } =
+cvlMove : Vec2 -> Vec2 -> MoveStrategy
+cvlMove p v =
+  Strategy (\_ ->
+    ( p, cvlMove (add p v) v ))
+
+circularMove : Vec2 -> Float -> Float -> Float -> MoveStrategy
+circularMove c r theta omega =
+  Strategy (\_ ->
+    ( { x = c.x + r * cos theta
+      , y = c.y + r * sin theta
+      }
+    , circularMove c r (theta + omega) omega
+    ))
+
+
+
+-- SURVIVE --
+
+surviveOnStage : SurviveStrategy
+surviveOnStage =
+  forever onStage ()
+
+onStage : Vec2 -> Bool
+onStage { x, y } =
   stage.minX < x + margin && x - margin < stage.maxX &&
   stage.minY < y + margin && y - margin < stage.maxY
+
+margin = 10.0
+
+surviveByTick : Int -> SurviveStrategy
+surviveByTick remain =
+  Strategy (\_ ->
+    ( remain > 0
+    , surviveByTick (remain - 1)
+    )
+  )
+
+
+
+-- SHOT --
+
+sampleShotStrategy : ShotStrategy
+sampleShotStrategy =
+  for 3 ( \a ->
+    for 30 ( prev noShot )
+    <| \_ -> prev (shotAimAtPlayer BulletMiddle 1.0)
+  a )
+  <| forever noShot
+
+shotAimAtPlayer : Shape -> Float -> ( Vec2, Vec2 ) -> List Bullet
+shotAimAtPlayer shape speed =
+  \( p, e ) ->
+    let
+      v = mul speed (normal (sub p e))
+    in
+      bullet
+      { shape = shape
+      , move = cvlMove e v
+      , survive = surviveOnStage
+      }
+      |> List.singleton
+
+noShot : ( Vec2, Vec2 ) -> List Bullet
+noShot =
+  always []
+
+
+
+-- STRATEGY --
+
+for : Int -> ((() -> Strategy a b) -> Strategy a b) -> (() -> Strategy a b) -> Strategy a b
+for times target term =
+  case times of
+    0 -> term ()
+    n -> target (\_ -> for (n - 1) target term)
+
+forever : (a -> b) -> () -> Strategy a b
+forever fun =
+  \_ -> prev fun (forever fun)
+
+prev : (a -> b) -> (() -> Strategy a b) -> Strategy a b
+prev fun next =
+  Strategy (\a -> ( fun a, next ()))
+
+
+
+-- UTIL --
+
+getPosition : Position a -> Vec2
+getPosition this =
+  { x = this.x
+  , y = this.y
+  }
+
+nan : Vec2
+nan =
+  { x = 0/0
+  , y = 0/0
+  }
+
+add : Vec2 -> Vec2 -> Vec2
+add a b =
+  { x = a.x + b.x
+  , y = a.y + b.y
+  }
+
+sub : Vec2 -> Vec2 -> Vec2
+sub a b =
+  { x = a.x - b.x
+  , y = a.y - b.y
+  }
+
+mul : Float -> Vec2 -> Vec2
+mul c { x, y } =
+  { x = c * x
+  , y = c * y
+  }
+
+normal : Vec2 -> Vec2
+normal { x, y } =
+  let
+    mag = sqrt ((x * x) + (y * y))
+  in
+    { x = x / mag
+    , y = y / mag
+    }
