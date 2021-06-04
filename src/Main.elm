@@ -15,6 +15,7 @@ import Debug exposing (toString)
 import Key exposing (KeySet, Key(..))
 import Vec2 exposing (..)
 import Renderer3D exposing (..)
+import Strategy exposing (Strategy, strategy)
 
 
 main =
@@ -94,12 +95,12 @@ type alias ShotStrategy =
   Strategy ( Vec2, Vec2 ) -- ( player, enemy )
   (List Bullet)
 
-type Strategy a b =
-  Strategy (a -> ( b, Strategy a b ))
+
 
 type alias Player =
-  Position
-  { r : Float
+  { x : Float
+  , y : Float
+  , r : Float
   , cooldown : Int
   , bullets : List Bullet
   }
@@ -107,7 +108,6 @@ type alias Player =
 type alias Enemy =
   Object
   { shot : ShotStrategy
-  , bullets : List Bullet
   }
 
 type alias Bullet =
@@ -116,21 +116,14 @@ type alias Bullet =
   }
 
 type alias Object misc =
-  Position
   { misc
   | angle : Float
   , tick : Int
   , shape : Shape
   , move : MoveStrategy
   , survive : SurviveStrategy
-  , isSurvive : Bool
   }
 
-type alias Position misc =
-  { misc
-  | x : Float
-  , y : Float
-  }
 
 
 -- UPDATE --
@@ -190,7 +183,7 @@ update msg model =
             existingPlayerBullets =
               playerBullets
                 |> List.map (updateBullet player)
-                |> List.filter .isSurvive
+                |> List.filter isSurvive
 
             playerBullets_ =
               newPlayerBullets ++ existingPlayerBullets
@@ -198,16 +191,16 @@ update msg model =
             enemies_ =
               enemies
                 |> List.map (updateEnemy player)
-                |> List.filter .isSurvive
+                |> List.filter isSurvive
 
             newBullets =
               enemies_
-                |> List.concatMap .bullets
+                |> List.concatMap getBullets
 
             existingBullets =
               bullets
                 |> List.map (updateBullet player)
-                |> List.filter .isSurvive
+                |> List.filter isSurvive
 
             bullets_ =
               newBullets ++ existingBullets
@@ -295,7 +288,7 @@ playerShot keys this =
   then
     { this
     | cooldown = 7
-    , bullets = playerShotNarrow <| getPosition this
+    , bullets = playerShotNarrow <| playerPosition this
     }
   else
     { this
@@ -321,49 +314,68 @@ updateBullet player this =
 updatePosition : Player -> Object a -> Object a
 updatePosition player this =
   let
-    ( { x, y }, next ) =
-      case this.move of
-        Strategy s -> s (player |> getPosition)
+    move =
+      this.move
+        |> Strategy.update (playerPosition player)
+
+    old =
+      this.move
+        |> Strategy.result
+
+    new =
+      move
+        |> Strategy.result
 
     angle =
-      atan2 (this.y - y) (this.x - x)
+      atan2 (new.y - old.y) (new.x - old.x)
   in
     { this
-    | x = x
-    , y = y
+    | move = move
     , angle = angle
-    , move = next
     }
 
 updateSurvive : Object a -> Object a
 updateSurvive this =
   let
-    ( isSurvive, next ) =
-      case this.survive of
-        Strategy s -> s (this |> getPosition)
+    survive =
+      this.survive
+        |> Strategy.update (getPosition this)
   in
-    { this
-    | survive = next
-    , isSurvive = isSurvive
-    }
+    { this | survive = survive }
 
 updateShot : Player -> Enemy -> Enemy
 updateShot player this =
   let
-    ( bullets, next ) =
-      case this.shot of
-        Strategy s -> s ( player |> getPosition, this |> getPosition )
+    shot =
+      this.shot
+        |> Strategy.update ( playerPosition player, getPosition this )
   in
-    { this
-    | shot = next
-    , bullets = bullets
-    }
+    { this | shot = shot }
 
 updateTick : Object a -> Object a
 updateTick this =
   { this | tick = this.tick + 1 }
 
+getPosition : Object a -> Vec2
+getPosition o =
+  o.move
+    |> Strategy.result
 
+isSurvive : Object a -> Bool
+isSurvive o =
+  o.survive
+    |> Strategy.result
+
+getBullets : Enemy -> List Bullet
+getBullets e =
+  e.shot
+    |> Strategy.result
+
+playerPosition : Player -> Vec2
+playerPosition { x, y } =
+  { x = x
+  , y = y
+  }
 
 
 -- VIEW --
@@ -457,15 +469,18 @@ renderPlayer c { x, y, r } =
 
 renderObject : Camera -> Object a -> Svg msg
 renderObject camera this =
-  case this.shape of
-    Butterfly ->
-      renderButterfly camera this.x this.y this.angle (toFloat this.tick * 0.07)
+  let
+    { x, y } = this |> getPosition
+  in
+    case this.shape of
+      Butterfly ->
+          renderButterfly camera x y this.angle (toFloat this.tick * 0.07)
 
-    BulletMiddle ->
-      renderBall camera "#808" "#F0F" ( this.x, 0.0, this.y ) 3.0
+      BulletMiddle ->
+        renderBall camera "#808" "#F0F" ( x, 0.0, y ) 3.0
 
-    PlayerBullet ->
-      renderPlayerBullet camera this.x this.y this.angle
+      PlayerBullet ->
+        renderPlayerBullet camera x y this.angle
 
 renderButterfly : Camera -> Float -> Float -> Float -> Float -> Svg msg
 renderButterfly c x y a w =
@@ -506,7 +521,7 @@ renderPlayerBullet c x y a =
   let
     l = 10.0
     head = ( x, 0.0, y )
-    tail = ( x + cos a * l, 0.0, y + sin a * l)
+    tail = ( x - cos a * l, 0.0, y - sin a * l)
   in
     Svg.g []
       [ renderBall c "none" "#CCC" head 1.0
@@ -532,25 +547,12 @@ subscriptions model =
 
 sampleEnemy : Enemy
 sampleEnemy =
-  enemy
   { shape = Butterfly
-  , move = circularMove { x = 150, y = 300 } 200.0 3.14 0.01
+  , move = circularMove { x = 150, y = 300 } 200.0 3.14 0.005
   , survive = surviveOnStage
   , shot = sampleShotStrategy
-  }
-
-enemy : EnemyProperty -> Enemy
-enemy { shape, move, survive, shot } =
-  { x = 0/0
-  , y = 0/0
-  , angle = 0/0
-  , shape = shape
-  , move = move
-  , survive = survive
-  , shot = shot
   , tick = 0
-  , isSurvive = True
-  , bullets = []
+  , angle = 0/0
   }
 
 
@@ -559,41 +561,37 @@ enemy { shape, move, survive, shot } =
 
 playerBullet : Vec2 -> Vec2 -> Bullet
 playerBullet p v =
-  bullet
     { shape = PlayerBullet
     , move = cvlMove p v
     , survive = surviveOnStage
+    , tick = 0
+    , angle = 0/0
     }
-
-bullet : ButtetProperty -> Bullet
-bullet { shape, move, survive } =
-  { x = 0/0
-  , y = 0/0
-  , angle = 0/0
-  , shape = shape
-  , move = move
-  , survive = survive
-  , tick = 0
-  , isSurvive = True
-  }
 
 
 
 -- MOVE --
 
 cvlMove : Vec2 -> Vec2 -> MoveStrategy
-cvlMove p v =
-  Strategy (\_ ->
-    ( p, cvlMove (add p v) v ))
+cvlMove from v =
+  let
+    next _ p =
+      add p v
+  in
+    strategy { init = from, update = next, view = identity }
 
 circularMove : Vec2 -> Float -> Float -> Float -> MoveStrategy
-circularMove c r theta omega =
-  Strategy (\_ ->
-    ( { x = c.x + r * cos theta
-      , y = c.y + r * sin theta
+circularMove center radius thetaZero omega =
+  let
+    next _ theta
+      = theta + omega
+
+    output theta =
+      { x = center.x + radius * cos theta
+      , y = center.y + radius * sin theta
       }
-    , circularMove c r (theta + omega) omega
-    ))
+  in
+    strategy { init = thetaZero, update = next, view = output }
 
 
 
@@ -601,7 +599,7 @@ circularMove c r theta omega =
 
 surviveOnStage : SurviveStrategy
 surviveOnStage =
-  forever onStage ()
+  strategy { init = { x = 0.0, y = 0.0 }, update = \p _ -> p, view = onStage }
 
 onStage : Vec2 -> Bool
 onStage { x, y } =
@@ -611,12 +609,12 @@ onStage { x, y } =
 margin = 10.0
 
 surviveByTick : Int -> SurviveStrategy
-surviveByTick remain =
-  Strategy (\_ ->
-    ( remain > 0
-    , surviveByTick (remain - 1)
-    )
-  )
+surviveByTick remaining =
+  let
+    decrement _ r = r - 1
+    isRemaining r = r > 0
+  in
+    strategy { init = remaining, update = decrement, view = isRemaining }
 
 
 
@@ -624,11 +622,20 @@ surviveByTick remain =
 
 sampleShotStrategy : ShotStrategy
 sampleShotStrategy =
-  for 3 ( \a ->
-    for 30 ( prev noShot )
-    <| \_ -> prev (\pv -> [ shotAimAtPlayer BulletMiddle 1.0 pv ])
-  a )
-  <| forever noShot
+  let
+    update_ pv ( n, m, _ ) =
+      if n == -1
+      then ( -1,   -1, pv )
+      else if m == 0
+      then ( n-1,  80, pv )
+      else (   n, m-1, pv )
+
+    view_ ( n, m, pv ) =
+      if m == 0
+      then [ shotAimAtPlayer BulletMiddle 1.0 pv ]
+      else []
+  in
+    strategy { init = ( 2, 80, ( nan, nan ) ), update = update_, view = view_ }
 
 shotAimAtPlayer : Shape -> Float -> ( Vec2, Vec2 ) -> Bullet
 shotAimAtPlayer shape speed =
@@ -636,15 +643,12 @@ shotAimAtPlayer shape speed =
     let
       v = mul speed (normal (sub p e))
     in
-      bullet
       { shape = shape
       , move = cvlMove e v
       , survive = surviveOnStage
+      , tick = 0
+      , angle = 0/0
       }
-
-noShot : ( Vec2, Vec2 ) -> List Bullet
-noShot =
-  always []
 
 playerShotNarrow : Vec2 -> List Bullet
 playerShotNarrow player =
@@ -652,31 +656,3 @@ playerShotNarrow player =
   , playerBullet (add player { x =  0.0, y = 2.0 }) { x = 0.0, y = 4.0 }
   , playerBullet (add player { x = -3.0, y = 0.0 }) { x = 0.0, y = 4.0 }
   ]
-
-
-
--- STRATEGY --
-
-for : Int -> ((() -> Strategy a b) -> Strategy a b) -> (() -> Strategy a b) -> Strategy a b
-for times target term =
-  case times of
-    0 -> term ()
-    n -> target (\_ -> for (n - 1) target term)
-
-forever : (a -> b) -> () -> Strategy a b
-forever fun =
-  \_ -> prev fun (forever fun)
-
-prev : (a -> b) -> (() -> Strategy a b) -> Strategy a b
-prev fun next =
-  Strategy (\a -> ( fun a, next ()))
-
-
-
--- UTIL --
-
-getPosition : Position a -> Vec2
-getPosition this =
-  { x = this.x
-  , y = this.y
-  }
