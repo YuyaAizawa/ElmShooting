@@ -41,6 +41,7 @@ type Scene
 
 type alias FlightModel =
   { player : Player
+  , playerBullets : List Bullet
   , enemies : List Enemy
   , bullets : List Bullet
   }
@@ -70,6 +71,14 @@ type alias ButtetProperty =
 type Shape
   = Butterfly
   | BulletMiddle
+  | PlayerBullet
+
+getRadius : Shape -> Float
+getRadius shape =
+  case shape of
+    Butterfly    -> 4.0
+    BulletMiddle -> 3.0
+    PlayerBullet -> 1.0
 
 type alias MoveStrategy =
   Strategy Vec2 -- player
@@ -89,6 +98,8 @@ type Strategy a b =
 type alias Player =
   Position
   { r : Float
+  , cooldown : Int
+  , bullets : List Bullet
   }
 
 type alias Enemy =
@@ -105,7 +116,7 @@ type alias Bullet =
 type alias Object misc =
   Position
   { misc
-  | d : Float
+  | angle : Float
   , tick : Int
   , shape : Shape
   , move : MoveStrategy
@@ -147,7 +158,14 @@ update msg model =
     TakeOff ->
       ( { model
         | scene = Flight
-          { player = { x = 0.0, y = 10.0, r = 0.0 }
+          { player =
+            { x = 0.0
+            , y = 10.0
+            , r = 0.0
+            , cooldown = 0
+            , bullets = []
+            }
+          , playerBullets = []
           , enemies = [ sampleEnemy ]
           , bullets = []
           }
@@ -163,11 +181,23 @@ update msg model =
         Title ->
           ( model , Cmd.none )
 
-        Flight { player, enemies, bullets } as flight ->
+        Flight { player, playerBullets, enemies, bullets } as flight ->
           let
             player_ =
               player
                 |> playerMove model.keys
+                |> playerShot model.keys
+
+            newPlayerBullets =
+              player_.bullets
+
+            existingPlayerBullets =
+              playerBullets
+                |> List.map (updateBullet player)
+                |> List.filter .isSurvive
+
+            playerBullets_ =
+              newPlayerBullets ++ existingPlayerBullets
 
             enemies_ =
               enemies
@@ -189,6 +219,7 @@ update msg model =
             scene =
               Flight
               { player = player_
+              , playerBullets = playerBullets_
               , enemies = enemies_
               , bullets = bullets_
               }
@@ -210,13 +241,20 @@ movableArea =
   , maxY = stage.maxY - movableMergin
   }
 
+
+updatePlayer : KeySet -> Player -> Player
+updatePlayer keys this =
+  this
+    |> playerMove keys
+    |> playerShot keys
+
 playerMove : KeySet -> Player -> Player
 playerMove keyset player =
   let
     d =
       if keyset |> Key.member Key.Shift
-      then 1.5
-      else 3.5
+      then 0.7
+      else 1.7
 
     nx =
       keyset
@@ -242,30 +280,32 @@ playerMove keyset player =
       keyset
         |> Key.fold
           (\k r -> case k of
-            Left -> r - 0.1
-            Right -> r + 0.1
+            Left -> r - 0.15
+            Right -> r + 0.15
             _ -> r
           )
-          player.r
-        |> (\r ->
-          let
-            absr = abs player.r
-          in
-            if absr < 0.1
-            then 0.0
-            else player.r + player.r / absr * -0.1)
+          (player.r + (abs player.r / player.r * -0.05))
+
   in
-  { player
-    | x = nx
-      |> max movableArea.minX
-      |> min movableArea.maxX
-    , y = ny
-      |> max movableArea.minY
-      |> min movableArea.maxY
-    , r = nr
-      |> max -0.6
-      |> min  0.6
-  }
+    { player
+      | x = nx |> clamp movableArea.minX movableArea.maxX
+      , y = ny |> clamp movableArea.minY movableArea.maxY
+      , r = nr |> clamp -0.6 0.6
+    }
+
+playerShot : KeySet -> Player -> Player
+playerShot keys this =
+  if (keys |> Key.member Key.Space) && (this.cooldown == 0)
+  then
+    { this
+    | cooldown = 7
+    , bullets = playerShotNarrow <| getPosition this
+    }
+  else
+    { this
+    | cooldown = max 0 (this.cooldown - 1)
+    , bullets = []
+    }
 
 updateEnemy : Player -> Enemy -> Enemy
 updateEnemy player this =
@@ -289,13 +329,13 @@ updatePosition player this =
       case this.move of
         Strategy s -> s (player |> getPosition)
 
-    d =
+    angle =
       atan2 (this.y - y) (this.x - x)
   in
     { this
     | x = x
     , y = y
-    , d = d
+    , angle = angle
     , move = next
     }
 
@@ -355,11 +395,8 @@ view model =
           ]
         ]
 
-    Flight flightModel ->
+    Flight { player, playerBullets, enemies, bullets } ->
       let
-        player = flightModel.player
-        enemies = flightModel.enemies
-        bullets = flightModel.bullets
         c = camera ( player.x / 2.0 , -200.0, 180) -1.57 -2.6 350 ( -200.0, -300.0, 0 )
       in
         Html.div []
@@ -369,9 +406,9 @@ view model =
             , SAttr.viewBox ("0 0 "++(String.fromInt viewBoxWidth)++" "++(String.fromInt viewBoxHeight))
             , SAttr.style "background: #333"
             ]
-            ( [ renderStage c
-              , renderPlayer c player
-              ]
+            ( [ renderStage c ]
+              ++ List.map (renderObject c) playerBullets
+              ++ [ renderPlayer c player ]
               ++ List.map (renderObject c) enemies
               ++ List.map (renderObject c) bullets
             )
@@ -426,11 +463,13 @@ renderObject : Camera -> Object a -> Svg msg
 renderObject camera this =
   case this.shape of
     Butterfly ->
-      renderButterfly camera this.x this.y this.d (toFloat this.tick * 0.07)
+      renderButterfly camera this.x this.y this.angle (toFloat this.tick * 0.07)
 
     BulletMiddle ->
       renderBall camera "#808" "#F0F" ( this.x, 0.0, this.y ) 3.0
 
+    PlayerBullet ->
+      renderPlayerBullet camera this.x this.y this.angle
 
 renderButterfly : Camera -> Float -> Float -> Float -> Float -> Svg msg
 renderButterfly c x y a w =
@@ -466,6 +505,18 @@ renderButterfly c x y a w =
   in
     Svg.g [] svgList
 
+renderPlayerBullet : Camera -> Float -> Float -> Float -> Svg msg
+renderPlayerBullet c x y a =
+  let
+    l = 10.0
+    head = ( x, 0.0, y )
+    tail = ( x + cos a * l, 0.0, y + sin a * l)
+  in
+    Svg.g []
+      [ renderBall c "none" "#CCC" head 1.0
+      , renderPolyline c "#777" [ head, tail ]
+      ]
+
 
 
 -- SUBSCRIPTION --
@@ -496,7 +547,7 @@ enemy : EnemyProperty -> Enemy
 enemy { shape, move, survive, shot } =
   { x = 0/0
   , y = 0/0
-  , d = 0/0
+  , angle = 0/0
   , shape = shape
   , move = move
   , survive = survive
@@ -510,11 +561,19 @@ enemy { shape, move, survive, shot } =
 
 -- BULLET --
 
+playerBullet : Vec2 -> Vec2 -> Bullet
+playerBullet p v =
+  bullet
+    { shape = PlayerBullet
+    , move = cvlMove p v
+    , survive = surviveOnStage
+    }
+
 bullet : ButtetProperty -> Bullet
 bullet { shape, move, survive } =
   { x = 0/0
   , y = 0/0
-  , d = 0/0
+  , angle = 0/0
   , shape = shape
   , move = move
   , survive = survive
@@ -571,11 +630,11 @@ sampleShotStrategy : ShotStrategy
 sampleShotStrategy =
   for 3 ( \a ->
     for 30 ( prev noShot )
-    <| \_ -> prev (shotAimAtPlayer BulletMiddle 1.0)
+    <| \_ -> prev (\pv -> [ shotAimAtPlayer BulletMiddle 1.0 pv ])
   a )
   <| forever noShot
 
-shotAimAtPlayer : Shape -> Float -> ( Vec2, Vec2 ) -> List Bullet
+shotAimAtPlayer : Shape -> Float -> ( Vec2, Vec2 ) -> Bullet
 shotAimAtPlayer shape speed =
   \( p, e ) ->
     let
@@ -586,11 +645,17 @@ shotAimAtPlayer shape speed =
       , move = cvlMove e v
       , survive = surviveOnStage
       }
-      |> List.singleton
 
 noShot : ( Vec2, Vec2 ) -> List Bullet
 noShot =
   always []
+
+playerShotNarrow : Vec2 -> List Bullet
+playerShotNarrow player =
+  [ playerBullet (add player { x =  3.0, y = 0.0 }) { x = 0.0, y = 4.0 }
+  , playerBullet (add player { x =  0.0, y = 2.0 }) { x = 0.0, y = 4.0 }
+  , playerBullet (add player { x = -3.0, y = 0.0 }) { x = 0.0, y = 4.0 }
+  ]
 
 
 
